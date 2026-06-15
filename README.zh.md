@@ -37,6 +37,11 @@ services:
     container_name: webssh
     network_mode: host
 
+    # Optional port (default: 8888)
+    # Uncomment when not using network_mode: host
+    # ports:
+    #   - "8888:8888"
+
     # ====== REQUIRED ======
     environment:
       # Login credentials
