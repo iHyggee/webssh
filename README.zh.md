@@ -28,7 +28,38 @@
 
 ## 快速开始 (Docker Compose)
 
-1. 编辑 `docker-compose.yml`，修改 `WEBSSH_PASSWORD` 和 `COOKIE_SECRET`
+1. 编辑 `docker-compose.yml`，修改 `WEBSSH_PASSWORD` 和 `COOKIE_SECRET`：
+
+```yaml
+services:
+  webssh:
+    build: .
+    container_name: webssh
+    network_mode: host
+
+    # ====== REQUIRED ======
+    environment:
+      # Login credentials
+      - WEBSSH_USER=admin
+      - WEBSSH_PASSWORD=***
+
+      # Cookie signing key - change this to a random string
+      - COOKIE_SECRET=change...
+
+    # ====== RECOMMENDED ======
+      # Bump to invalidate all sessions
+      - COOKIE_VERSION=1
+
+      # Enable real-IP via X-Forwarded-For (only when behind nginx)
+      - BEHIND_PROXY=true
+      - TRUSTED_PROXY=127.0.0.1
+
+      # Optional: allow URL ?command=xxx (default: off)
+      # - ALLOW_URL_COMMAND=true
+
+    restart: unless-stopped
+```
+
 2. 构建并启动：
 
 ```bash

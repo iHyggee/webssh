@@ -28,7 +28,38 @@ Ideal for:
 
 ## Quick Start (Docker Compose)
 
-1. Edit `docker-compose.yml`, change `WEBSSH_PASSWORD` and `COOKIE_SECRET`
+1. Edit `docker-compose.yml`, change `WEBSSH_PASSWORD` and `COOKIE_SECRET`:
+
+```yaml
+services:
+  webssh:
+    build: .
+    container_name: webssh
+    network_mode: host
+
+    # ====== REQUIRED ======
+    environment:
+      # Login credentials
+      - WEBSSH_USER=admin
+      - WEBSSH_PASSWORD=***
+
+      # Cookie signing key - change this to a random string
+      - COOKIE_SECRET=change-me-to-a-random-string
+
+    # ====== RECOMMENDED ======
+      # Bump to invalidate all sessions
+      - COOKIE_VERSION=1
+
+      # Enable real-IP via X-Forwarded-For (only when behind nginx)
+      - BEHIND_PROXY=true
+      - TRUSTED_PROXY=127.0.0.1
+
+      # Optional: allow URL ?command=xxx (default: off)
+      # - ALLOW_URL_COMMAND=true
+
+    restart: unless-stopped
+```
+
 2. Build and start:
 
 ```bash
