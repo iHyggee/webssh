@@ -44,7 +44,7 @@ docker compose up -d --build
 | `WEBSSH_USER` | 是 | 登录用户名 |
 | `WEBSSH_PASSWORD` | 是 | 登录密码（明文） |
 | `COOKIE_SECRET` | 是 | Cookie 签名密钥，设为一个长随机字符串 |
-| `COOKIE_VERSION` | 建议 | 修改此值可使所有会话立即失效 |
+| `COOKIE_VERSION` | 建议 | 一个数字版本号，嵌入在登录 Cookie 中。修改此值（如 `1` → `2`）可立即使所有已有会话失效 — 改密码后或安全事件时使用 |
 | `BEHIND_PROXY` | 有 nginx 时 | 设为 `true` 启用 X-Forwarded-For 获取真实 IP |
 | `TRUSTED_PROXY` | 有 nginx 时 | 逗号分隔的可信代理 IP 列表（防 IP 伪造） |
 | `ALLOW_URL_COMMAND` | 可选 | 设为 `true` 允许 URL 中带 `?command=xxx` |
@@ -120,7 +120,17 @@ server {
 
 ## 会话失效
 
-修改密码后担心旧的 Cookie 仍有效？将 `COOKIE_VERSION` 的值改大并重启，所有已有登录立即失效。
+改完密码担心别人还能用旧的 Cookie 登录？`COOKIE_VERSION` 就是解决这个问题的。
+
+**原理：** 每个登录 Cookie 都嵌入了当前的 `COOKIE_VERSION` 值。当你改这个数字（比如从 `1` 改成 `2`），服务器会立刻拒绝所有携带旧版本号的 Cookie — 所有已有会话瞬间失效，不用等过期。用户只需重新登录，就会拿到带版本号 `2` 的新 Cookie。
+
+**什么时候用：**
+- 修改了 `WEBSSH_PASSWORD` 之后
+- 从 `.htpasswd` 中删除了某个用户之后
+- 怀疑 Cookie 被盗用时
+- 定期轮换，作为安全维护习惯
+
+**怎么用：** 在 `docker-compose.yml` 里把 `COOKIE_VERSION` 改成任意新值，重启容器即可。
 
 ## 安全性
 
