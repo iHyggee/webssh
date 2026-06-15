@@ -14,7 +14,7 @@ Ideal for:
 
 | Login | Main Form | Terminal |
 |-------|-----------|----------|
-| ![Login](screenshots/login.png?v=2) | ![Form](screenshots/main-form.png?v=2) | ![Terminal](screenshots/terminal.png?v=2) |
+| ![Login](screenshots/login.png?v=3) | ![Form](screenshots/main-form.png?v=3) | ![Terminal](screenshots/terminal.png?v=3) |
 
 ## Features
 
