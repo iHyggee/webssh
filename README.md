@@ -2,14 +2,26 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-Web-based SSH client. Connect to remote servers through your browser. Supports password and private key authentication.
+**WebSSH Console** turns your browser into an SSH terminal. No desktop client needed — just open a URL, log in, and you have a full terminal to any SSH server.
+
+Ideal for:
+- Managing servers from a locked-down machine (no Putty / Terminal allowed)
+- Accessing your homelab behind NAT via a reverse proxy
+- QNAP / Synology NAS administration through Docker
+- Giving teammates temporary SSH access without sharing credentials or installing software
+
+## What It Looks Like
+
+| Login | Main Form | Terminal |
+|-------|-----------|----------|
+| ![Login](screenshots/login.png) | ![Form](screenshots/main-form.png) | ![Terminal](screenshots/terminal.png) |
 
 ## Features
 
 - **Cookie-based login** — no browser-native HTTP Basic Auth popups
 - **Connection history** — hostname and username remembered after each successful connection, with dropdown picker
 - **Form validation** — empty required fields auto-focus with Chinese error messages
-- **tmux auto-attach** — checkbox to automatically enter tmux session on connect (session recovery)
+- **tmux auto-attach** — checkbox to automatically enter tmux session on connect (session recovery after network drop)
 - **Private key support** — RSA / DSA / ECDSA / Ed25519 keys, with optional passphrase
 - **White clean UI** — compact desktop layout, no unnecessary decorations
 - **Responsive** — works on desktop and mobile
@@ -23,7 +35,7 @@ Web-based SSH client. Connect to remote servers through your browser. Supports p
 docker compose up -d --build
 ```
 
-3. Open `http://your-ip:8888`, login with the configured credentials
+3. Open `http://your-server-ip:8888`, log in, fill in the SSH target, and hit Connect
 
 ## Environment Variables
 
@@ -32,9 +44,9 @@ docker compose up -d --build
 | `WEBSSH_USER` | Yes | Login username |
 | `WEBSSH_PASSWORD` | Yes | Login password (plaintext) |
 | `COOKIE_SECRET` | Yes | Cookie signing key, set to a long random string |
-| `COOKIE_VERSION` | Recommended | Change to invalidate all sessions |
-| `BEHIND_PROXY` | With nginx | Set to `true` to enable real-IP via X-Forwarded-For |
-| `TRUSTED_PROXY` | With nginx | Comma-separated trusted proxy IPs (prevents IP spoofing) |
+| `COOKIE_VERSION` | Recommended | Change to invalidate all sessions instantly |
+| `BEHIND_PROXY` | Behind nginx | Set to `true` to enable real-IP via X-Forwarded-For |
+| `TRUSTED_PROXY` | Behind nginx | Comma-separated trusted proxy IPs (prevents IP spoofing) |
 | `ALLOW_URL_COMMAND` | Optional | Set to `true` to allow `?command=xxx` in URL |
 
 ## Multi-User (.htpasswd)
@@ -92,9 +104,23 @@ Set `BEHIND_PROXY=true` and `TRUSTED_PROXY=127.0.0.1` in docker-compose.yml.
 | `--maxconn` | `20` | Max concurrent connections per IP |
 | `--timeout` | `3` | SSH connection timeout (seconds) |
 
+## FAQ
+
+**Q: What is the "tmux auto-attach" checkbox?**
+When checked, the server runs `tmux new -A -s webssh` right after connecting. If your SSH session drops (network blip, closing the browser), just reconnect and you're back in the same terminal session — everything you were doing is still there.
+
+**Q: I connected but the terminal is just a black screen.**
+This usually means SSH authentication failed. Check the server logs. If using a private key, make sure the passphrase is correct and the key format is supported (RSA, DSA, ECDSA, Ed25519).
+
+**Q: How do I invalidate all login sessions?**
+Bump `COOKIE_VERSION` from `1` to `2` (or `2` to `3`) and restart the container. All existing cookies become invalid instantly.
+
+**Q: Can I skip the login page?**
+No. The login page is mandatory. It replaces browser-native HTTP Basic Auth dialogs (which can't be customized) with a proper HTML login form with rate limiting.
+
 ## Session Invalidation
 
-Changed password but worried old cookies still work? Bump `COOKIE_VERSION` from `1` to `2` and restart. All existing logins are invalidated instantly.
+Changed password but worried old cookies still work? Bump `COOKIE_VERSION` and restart. All existing logins are invalidated instantly.
 
 ## Security
 
