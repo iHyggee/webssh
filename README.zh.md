@@ -1,5 +1,7 @@
 # WebSSH Console
 
+[English](README.md) | [中文](README.zh.md)
+
 基于浏览器的 SSH 客户端。通过浏览器连接远程服务器，支持密码和私钥认证。
 
 ## 功能特性

@@ -1,5 +1,7 @@
 # WebSSH Console
 
+[English](README.md) | [中文](README.zh.md)
+
 Web-based SSH client. Connect to remote servers through your browser. Supports password and private key authentication.
 
 ## Features
