@@ -14,7 +14,7 @@
 
 | 登录页 | 主表单 | 终端连接 |
 |-------|-----------|----------|
-| ![登录](screenshots/login.png?v=4) | ![表单](screenshots/main-form.png?v=4) | ![终端](screenshots/terminal.png?v=4) |
+| ![登录](https://raw.githubusercontent.com/iHyggee/webssh/master/screenshots/login.png) | ![表单](https://raw.githubusercontent.com/iHyggee/webssh/master/screenshots/main-form.png) | ![终端](https://raw.githubusercontent.com/iHyggee/webssh/master/screenshots/terminal.png) |
 
 ## 功能特性
 
