@@ -107,7 +107,7 @@ Set `BEHIND_PROXY=true` and `TRUSTED_PROXY=127.0.0.1` in docker-compose.yml.
 ## FAQ
 
 **Q: What is the "tmux auto-attach" checkbox?**
-When checked, the server runs `tmux new -A -s webssh` right after connecting. If your SSH session drops (network blip, closing the browser), just reconnect and you're back in the same terminal session — everything you were doing is still there.
+When checked, the server runs `exec tmux new -A -s webssh \; set -g mouse on` right after connecting. If your SSH session drops (network blip, closing the browser), just reconnect and you're back in the same terminal session — everything you were doing is still there. Mouse wheel scrolling works inside tmux (scrolling through terminal history), not cycling through shell command history.
 
 **Q: I connected but the terminal is just a black screen.**
 This usually means SSH authentication failed. Check the server logs. If using a private key, make sure the passphrase is correct and the key format is supported (RSA, DSA, ECDSA, Ed25519).

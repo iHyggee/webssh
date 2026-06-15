@@ -584,7 +584,7 @@ jQuery(function ($) {
       }
       if (document.getElementById('use_tmux').checked) {
         setTimeout(function () {
-          sock.send(JSON.stringify({ 'data': 'exec tmux new -A -s webssh\r' }));
+          sock.send(JSON.stringify({ 'data': 'exec tmux new -A -s webssh \\; set -g mouse on\r' }));
         }, 1500);
       }
     };
