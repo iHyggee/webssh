@@ -110,6 +110,11 @@ Changed password but worried old cookies still work? Bump `COOKIE_VERSION` from 
 
 Python / Tornado / Paramiko / xterm.js 5.5
 
+## Acknowledgments
+
+- [huashengdun](https://github.com/huashengdun/webssh) — original webssh project (2017)
+- [cmliu](https://github.com/cmliu/webssh) — cookie login, Docker deployment, and UI improvements
+
 ## License
 
 MIT
