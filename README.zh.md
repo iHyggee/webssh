@@ -14,7 +14,7 @@
 
 | 登录页 | 主表单 | 终端连接 |
 |-------|-----------|----------|
-| ![登录](screenshots/login.png?v=3) | ![表单](screenshots/main-form.png?v=3) | ![终端](screenshots/terminal.png?v=3) |
+| ![登录](screenshots/login.png?v=4) | ![表单](screenshots/main-form.png?v=4) | ![终端](screenshots/terminal.png?v=4) |
 
 ## 功能特性
 
