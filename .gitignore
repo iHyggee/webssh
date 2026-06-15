@@ -67,5 +67,3 @@ known_hosts
 .htpasswd
 webssh/static/test.html
 tests/
-install.sh
-setup.py
