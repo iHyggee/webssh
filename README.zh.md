@@ -37,11 +37,6 @@ services:
     container_name: webssh
     network_mode: host
 
-    # Optional port (default: 8888)
-    # Uncomment when not using network_mode: host
-    # ports:
-    #   - "8888:8888"
-
     # ====== REQUIRED ======
     environment:
       # Login credentials
@@ -52,6 +47,9 @@ services:
       - COOKIE_SECRET=change...
 
     # ====== RECOMMENDED ======
+      # Listen port (default: 8888)
+      - PORT=8888
+
       # Bump to invalidate all sessions
       - COOKIE_VERSION=1
 
@@ -77,6 +75,7 @@ docker compose up -d --build
 
 | 变量 | 必填 | 说明 |
 |----------|----------|-------------|
+| `PORT` | 否 | 监听端口（默认: 8888） |
 | `WEBSSH_USER` | 是 | 登录用户名 |
 | `WEBSSH_PASSWORD` | 是 | 登录密码（明文） |
 | `COOKIE_SECRET` | 是 | Cookie 签名密钥，设为一个长随机字符串 |

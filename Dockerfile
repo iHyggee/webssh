@@ -11,4 +11,4 @@ COPY .htpasswd .
 
 EXPOSE 8888
 
-CMD ["python", "run.py", "--address=0.0.0.0", "--port=8888", "--origin=same", "--policy=autoadd", "--authfile=.htpasswd"]
+CMD python run.py --address=0.0.0.0 --port=${PORT:-8888} --origin=same --policy=autoadd --authfile=.htpasswd
