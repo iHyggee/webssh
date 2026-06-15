@@ -14,7 +14,7 @@ Ideal for:
 
 | Login | Main Form | Terminal |
 |-------|-----------|----------|
-| ![Login](https://raw.githubusercontent.com/iHyggee/webssh/master/screenshots/login.png) | ![Form](https://raw.githubusercontent.com/iHyggee/webssh/master/screenshots/main-form.png) | ![Terminal](https://raw.githubusercontent.com/iHyggee/webssh/master/screenshots/terminal.png) |
+| ![Login](https://github.com/iHyggee/webssh/blob/master/screenshots/login.png) | ![Form](https://github.com/iHyggee/webssh/blob/master/screenshots/main-form.png) | ![Terminal](https://github.com/iHyggee/webssh/blob/master/screenshots/terminal.png) |
 
 ## Features
 
