@@ -42,7 +42,7 @@ define('origin', default='same', help='''Origin policy,
 '<domains>': custom domains policy, matches any domain in the <domains> list
 separated by comma;
 '*': wildcard policy, matches any domain, allowed in debug mode only.''')
-define('wpintvl', type=float, default=0, help='Websocket ping interval')
+define('wpintvl', type=float, default=30, help='Websocket ping interval (seconds)')
 define('timeout', type=float, default=3, help='SSH connection timeout')
 define('delay', type=float, default=3, help='The delay to call recycle_worker')
 define('maxconn', type=int, default=20,
@@ -51,6 +51,8 @@ define('font', default='', help='custom font filename')
 define('encoding', default='utf-8',
        help='''The default character encoding of ssh servers.
 Example: --encoding='utf-8' to solve the problem with some switches&routers''')
+define('authfile', default='', help='HTTP Basic Auth credentials file '
+       '(format: username:password per line, or username:sha256:hash)')
 define('version', type=bool, help='Show version information',
        callback=print_version)
 
@@ -74,18 +76,31 @@ class Font(object):
 
 
 def get_app_settings(options):
+    from webssh.handler import NoCacheStaticFileHandler
+    allow_url_command = os.environ.get('ALLOW_URL_COMMAND', '').lower() in ('1', 'true', 'yes')
     settings = dict(
         template_path=os.path.join(base_dir, 'webssh', 'templates'),
         static_path=os.path.join(base_dir, 'webssh', 'static'),
+        static_handler_class=NoCacheStaticFileHandler,
         websocket_ping_interval=options.wpintvl,
         debug=options.debug,
         xsrf_cookies=options.xsrf,
+        cookie_secret = os.environ.get('COOKIE_SECRET') or (
+        logging.warning(
+            'COOKIE_SECRET not set, using default. '
+            'Set it via environment variable for production: '
+            'COOKIE_SECRET=<random-string>'
+        ) or 'webssh-session-secret-change-in-production'
+    ),
+        login_url='/login',
+        authfile=getattr(options, 'authfile', ''),
         font=Font(
             get_font_filename(options.font,
                               os.path.join(base_dir, *font_dirs)),
             font_dirs[1:]
         ),
-        origin_policy=get_origin_setting(options)
+        origin_policy=get_origin_setting(options),
+        allow_url_command=allow_url_command
     )
     return settings
 

@@ -1,18 +1,14 @@
-FROM python:3-alpine
+FROM python:3.11-slim
 
-LABEL maintainer='<author>'
-LABEL version='0.0.0-dev.0-build.0'
+WORKDIR /app
 
-ADD . /code
-WORKDIR /code
-RUN \
-  apk add --no-cache libc-dev libffi-dev gcc && \
-  pip install -r requirements.txt --no-cache-dir && \
-  apk del gcc libc-dev libffi-dev && \
-  addgroup webssh && \
-  adduser -Ss /bin/false -g webssh webssh && \
-  chown -R webssh:webssh /code
+# 构建时一次性安装依赖，启动时不再重复安装
+RUN pip install --no-cache-dir tornado>=4.5.0 paramiko>=2.3.1
 
-EXPOSE 8888/tcp
-USER webssh
-CMD ["python", "run.py", "--delay=10", "--encoding=utf-8", "--fbidhttp=False", "--maxconn=20", "--origin=*", "--policy=warning", "--redirect=False", "--timeout=10", "--debug", "--xsrf=False", "--xheaders", "--wpintvl=1"]
+COPY run.py .
+COPY webssh/ webssh/
+COPY .htpasswd .
+
+EXPOSE 8888
+
+CMD ["python", "run.py", "--address=0.0.0.0", "--port=8888", "--origin=same", "--policy=autoadd", "--authfile=.htpasswd"]

@@ -23,13 +23,20 @@ jQuery(function ($) {
     messages = { 1: 'This client is connecting ...', 2: 'This client is already connnected.' },
     key_max_size = 16384,
     fields = ['hostname', 'port', 'username'],
-    form_keys = fields.concat(['password', 'totp']),
+    form_keys = fields.concat([]),
     opts_keys = ['bgcolor', 'title', 'encoding', 'command', 'term', 'fontsize', 'fontcolor', 'cursor'],
     url_form_data = {},
     url_opts_data = {},
     validated_form_data,
-    event_origin,
     hostname_tester = /((^\s*((([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]))\s*$)|(^\s*((([0-9A-Fa-f]{1,4}:){7}([0-9A-Fa-f]{1,4}|:))|(([0-9A-Fa-f]{1,4}:){6}(:[0-9A-Fa-f]{1,4}|((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){1,2})|:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){1,3})|((:[0-9A-Fa-f]{1,4})?:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){1,4})|((:[0-9A-Fa-f]{1,4}){0,2}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){1,5})|((:[0-9A-Fa-f]{1,4}){0,3}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){1,6})|((:[0-9A-Fa-f]{1,4}){0,4}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(:(((:[0-9A-Fa-f]{1,4}){1,7})|((:[0-9A-Fa-f]{1,4}){0,5}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:)))(%.+)?\s*$))|(^\s*((?=.{1,255}$)(?=.*[A-Za-z].*)[0-9A-Za-z](?:(?:[0-9A-Za-z]|\b-){0,61}[0-9A-Za-z])?(?:\.[0-9A-Za-z](?:(?:[0-9A-Za-z]|\b-){0,61}[0-9A-Za-z])?)*)\s*$)/;
+
+  // Auto-detect FitAddon UMD format: some builds export class directly,
+  // others wrap it as {FitAddon: class}
+  function getFitAddonClass() {
+    if (typeof window.FitAddon === 'function') return window.FitAddon;
+    if (window.FitAddon && typeof window.FitAddon.FitAddon === 'function') return window.FitAddon.FitAddon;
+    return null;
+  }
 
 
   function store_items(names, data) {
@@ -116,36 +123,66 @@ jQuery(function ($) {
   }
 
 
-  function parse_xterm_style() {
-    var text = $('.xterm-helpers style').text();
-    var arr = text.split('xterm-normal-char{width:');
-    style.width = parseFloat(arr[1]);
-    arr = text.split('div{height:');
-    style.height = parseFloat(arr[1]);
-  }
-
-
   function get_cell_size(term) {
-    style.width = term._core._renderService._renderer.dimensions.actualCellWidth;
-    style.height = term._core._renderService._renderer.dimensions.actualCellHeight;
+    // Read raw cell dimensions (internal API, may change across xterm.js versions).
+    // current_geometry handles the higher-level proposeDimensions logic.
+    try {
+      var css = term._core._renderService.dimensions.css;
+      if (css.cell.width > 0) style.width = css.cell.width;
+      if (css.cell.height > 0) style.height = css.cell.height;
+    } catch(e) {
+      console.warn('Cannot read cell dimensions:', e.message);
+    }
   }
 
 
   function toggle_fullscreen(term) {
-    $('#terminal .terminal').toggleClass('fullscreen');
-    term.fitAddon.fit();
+    $('#terminal .xterm').toggleClass('fullscreen');
+    // xterm 5.x canvas 需要下一帧才有有效尺寸
+    requestAnimationFrame(function () {
+      try {
+        if (term.fitAddon) {
+          // Fullscreen CSS makes parent element collapse to 0 height,
+          // so proposeDimensions() returns junk. Use viewport-based sizing.
+          var geo = current_geometry(term);
+          if (geo.cols > 2 && geo.rows > 3) {
+            // Use on_resize so the server gets notified of the PTY size
+            term.on_resize(geo.cols, geo.rows);
+          }
+        }
+        // Fit succeeded, reveal terminal smoothly
+        document.getElementById('terminal').classList.add('ready');
+      } catch(e) {
+        console.error('fit error:', e);
+        status.text('终端自适应失败: ' + e.message).show();
+        // Show terminal anyway after error
+        document.getElementById('terminal').classList.add('ready');
+      }
+    });
+    // Safety: show terminal after 2s even if rAF never fires
+    setTimeout(function () {
+      document.getElementById('terminal').classList.add('ready');
+    }, 2000);
   }
 
 
   function current_geometry(term) {
-    if (!style.width || !style.height) {
-      try {
-        get_cell_size(term);
-      } catch (TypeError) {
-        parse_xterm_style();
+    // Prefer public API: FitAddon.proposeDimensions()
+    if (term.fitAddon) {
+      var dims = term.fitAddon.proposeDimensions();
+      // Sanity check: fullscreen CSS may collapse parent element,
+      // causing proposeDimensions to return tiny values like rows=1.
+      if (dims && dims.cols > 2 && dims.rows > 3) {
+        return { 'cols': dims.cols, 'rows': dims.rows };
       }
     }
-
+    // Fallback: measure cell size and calculate from viewport
+    if (!style.width || !style.height) {
+      get_cell_size(term);
+    }
+    if (!style.width || !style.height) {
+      return { 'cols': term.cols, 'rows': term.rows };
+    }
     var cols = parseInt(window.innerWidth / style.width, 10) - 1;
     var rows = parseInt(window.innerHeight / style.height, 10);
     return { 'cols': cols, 'rows': rows };
@@ -159,20 +196,21 @@ jQuery(function ($) {
 
 
   function set_backgound_color(term, color) {
-    term.setOption('theme', {
-      background: color
-    });
+    var t = term.options.theme || {};
+    t.background = color;
+    term.options.theme = t;
   }
 
   function set_font_color(term, color) {
-    term.setOption('theme', {
-      foreground: color
-    });
+    var t = term.options.theme || {};
+    t.foreground = color;
+    term.options.theme = t;
   }
 
   function custom_font_is_loaded() {
     if (!custom_font) {
       console.log('No custom font specified.');
+      return false;
     } else {
       console.log('Status of custom font ' + custom_font.family + ': ' + custom_font.status);
       if (custom_font.status === 'loaded') {
@@ -182,6 +220,7 @@ jQuery(function ($) {
         return false;
       }
     }
+    return false;
   }
 
   function update_font_family(term) {
@@ -191,12 +230,12 @@ jQuery(function ($) {
     }
 
     if (!default_fonts) {
-      default_fonts = term.getOption('fontFamily');
+      default_fonts = term.options.fontFamily;
     }
 
     if (custom_font_is_loaded()) {
       var new_fonts = custom_font.family + ', ' + default_fonts;
-      term.setOption('fontFamily', new_fonts);
+      term.options.fontFamily = new_fonts;
       term.font_family_updated = true;
       console.log('Using custom font family ' + new_fonts);
     }
@@ -210,7 +249,7 @@ jQuery(function ($) {
     }
 
     if (default_fonts) {
-      term.setOption('fontFamily', default_fonts);
+      term.options.fontFamily = default_fonts;
       term.font_family_updated = false;
       console.log('Using default font family ' + default_fonts);
     }
@@ -293,7 +332,7 @@ jQuery(function ($) {
 
   function log_status(text, to_populate) {
     console.log(text);
-    status.html(text.split('\n').join('<br/>'));
+    status.text(text);
 
     if (to_populate && validated_form_data) {
       populate_form(validated_form_data);
@@ -335,6 +374,7 @@ jQuery(function ($) {
       terminal = document.getElementById('terminal'),
       termOptions = {
         cursorBlink: true,
+        lineHeight: 1.2,
         theme: {
           background: url_opts_data.bgcolor || 'black',
           foreground: url_opts_data.fontcolor || 'white',
@@ -351,8 +391,13 @@ jQuery(function ($) {
 
     var term = new window.Terminal(termOptions);
 
-    term.fitAddon = new window.FitAddon.FitAddon();
-    term.loadAddon(term.fitAddon);
+    var FitAddonClass = getFitAddonClass();
+    term.fitAddon = FitAddonClass ? new FitAddonClass() : null;
+    if (term.fitAddon) {
+      term.loadAddon(term.fitAddon);
+    } else {
+      console.warn('FitAddon not available, terminal will not auto-resize');
+    }
 
     console.log(url);
     if (!msg.encoding) {
@@ -364,10 +409,23 @@ jQuery(function ($) {
 
     function term_write(text) {
       if (term) {
-        term.write(text);
+        try {
+          term.write(text);
+        } catch(e) {
+          console.error('term.write error:', e);
+          status.text('终端写入错误: ' + e.message).show();
+        }
         if (!term.resized) {
-          resize_terminal(term);
-          term.resized = true;
+          // xterm 5.x canvas 需要下一帧才有有效尺寸
+          requestAnimationFrame(function () {
+            try {
+              resize_terminal(term);
+              term.resized = true;
+            } catch(e) {
+              console.error('resize error:', e);
+              status.text('终端缩放错误: ' + e.message).show();
+            }
+          });
         }
       }
     }
@@ -484,7 +542,12 @@ jQuery(function ($) {
     term.on_resize = function (cols, rows) {
       if (cols !== this.cols || rows !== this.rows) {
         console.log('Resizing terminal to geometry: ' + format_geometry(cols, rows));
-        this.resize(cols, rows);
+        try {
+          this.resize(cols, rows);
+        } catch(e) {
+          console.error('resize failed:', e);
+          status.text('终端缩放失败: ' + e.message).show();
+        }
         sock.send(JSON.stringify({ 'resize': [cols, rows] }));
       }
     };
@@ -497,17 +560,32 @@ jQuery(function ($) {
     sock.onopen = function () {
       // 连接成功时隐藏waiter
       waiter.hide();
-      document.querySelector('.github-corner').classList.add('hidden');
       term.open(terminal);
       toggle_fullscreen(term);
       update_font_family(term);
       term.focus();
       state = CONNECTED;
+
+      // Save connection to history
+      var h = document.getElementById('hostname').value.trim();
+      if (h) {
+        save_connection_history(h);
+      }
+      var u = document.getElementById('username').value.trim();
+      if (u) {
+        save_username_history(u);
+      }
+
       title_element.text = url_opts_data.title || default_title;
-      if (url_opts_data.command) {
+      if (url_opts_data.command && window.ALLOW_URL_COMMAND) {
         setTimeout(function () {
           sock.send(JSON.stringify({ 'data': url_opts_data.command + '\r' }));
         }, 500);
+      }
+      if (document.getElementById('use_tmux').checked) {
+        setTimeout(function () {
+          sock.send(JSON.stringify({ 'data': 'exec tmux new -A -s webssh\r' }));
+        }, 1500);
       }
     };
 
@@ -518,11 +596,19 @@ jQuery(function ($) {
     sock.onerror = function (e) {
       // 连接错误时隐藏waiter
       waiter.hide();
-      document.querySelector('.github-corner').classList.remove('hidden');
+      // github-corner removed
       console.error(e);
     };
 
+    var on_resize_window = function () {
+      if (term) {
+        resize_terminal(term);
+      }
+    };
+    $(window).resize(on_resize_window);
+
     sock.onclose = function (e) {
+      $(window).off('resize', on_resize_window);
       term.dispose();
       term = undefined;
       sock = undefined;
@@ -532,12 +618,6 @@ jQuery(function ($) {
       default_title = 'WebSSH';
       title_element.text = default_title;
     };
-
-    $(window).resize(function () {
-      if (term) {
-        resize_terminal(term);
-      }
-    });
   }
 
 
@@ -670,6 +750,24 @@ jQuery(function ($) {
     }
 
     var result = validate_form_data(data);
+
+    // Check required fields in order, focus first empty one
+    if (!(data.get('hostname') || '').trim()) {
+      log_status('请输入主机地址');
+      setTimeout(function () { document.getElementById('hostname').focus(); }, 50);
+      return;
+    }
+    if (!(data.get('username') || '').trim()) {
+      log_status('请输入用户名');
+      setTimeout(function () { document.getElementById('username').focus(); }, 50);
+      return;
+    }
+    if (!(data.get('password') || '').trim()) {
+      log_status('请输入密码');
+      setTimeout(function () { document.getElementById('password').focus(); }, 50);
+      return;
+    }
+
     if (!result.valid) {
       log_status(result.errors.join('\n'));
       return;
@@ -698,6 +796,24 @@ jQuery(function ($) {
       _xsrf = form.querySelector('input[name="_xsrf"]');
 
     var result = validate_form_data(wrap_object(data));
+
+    // Check required fields in order, focus first empty one
+    if (!(data.hostname || '').trim()) {
+      log_status('请输入主机地址');
+      setTimeout(function () { document.getElementById('hostname').focus(); }, 50);
+      return;
+    }
+    if (!(data.username || '').trim()) {
+      log_status('请输入用户名');
+      setTimeout(function () { document.getElementById('username').focus(); }, 50);
+      return;
+    }
+    if (!(data.password || '').trim()) {
+      log_status('请输入密码');
+      setTimeout(function () { document.getElementById('password').focus(); }, 50);
+      return;
+    }
+
     if (!result.valid) {
       log_status(result.errors.join('\n'));
       return;
@@ -705,9 +821,6 @@ jQuery(function ($) {
 
     data.term = term_type.val();
     data._xsrf = _xsrf.value;
-    if (event_origin) {
-      data._origin = event_origin;
-    }
 
     status.text('');
     button.prop('disabled', true);
@@ -723,7 +836,7 @@ jQuery(function ($) {
   }
 
 
-  function connect(hostname, port, username, password, privatekey, passphrase, totp) {
+  function connect(hostname, port, username, password, privatekey, passphrase) {
     // for console use
     var result, opts;
 
@@ -742,8 +855,7 @@ jQuery(function ($) {
           username: username,
           password: password,
           privatekey: privatekey,
-          passphrase: passphrase,
-          totp: totp
+          passphrase: passphrase
         };
       } else {
         opts = hostname;
@@ -769,31 +881,111 @@ jQuery(function ($) {
     connect();
   });
 
-
-  function cross_origin_connect(event) {
-    console.log(event.origin);
-    var prop = 'connect',
-      args;
-
-    try {
-      args = JSON.parse(event.data);
-    } catch (SyntaxError) {
-      args = event.data.split('|');
-    }
-
-    if (!Array.isArray(args)) {
-      args = [args];
-    }
-
-    try {
-      event_origin = event.origin;
-      wssh[prop].apply(wssh, args);
-    } finally {
-      event_origin = undefined;
-    }
+  // === Connection History ===
+  function save_connection_history(hostname) {
+    var key = 'webssh_history';
+    var hist = JSON.parse(window.localStorage.getItem(key) || '[]');
+    hist = hist.filter(function (e) { return e !== hostname; });
+    hist.unshift(hostname);
+    hist = hist.slice(0, 10);
+    window.localStorage.setItem(key, JSON.stringify(hist));
+    load_connection_history();
   }
 
-  window.addEventListener('message', cross_origin_connect, false);
+  function load_connection_history() {
+    var key = 'webssh_history';
+    var hist = JSON.parse(window.localStorage.getItem(key) || '[]');
+    var list = document.getElementById('hostname-history-list');
+    if (!list) return;
+    list.innerHTML = '';
+    hist.forEach(function (entry) {
+      var li = document.createElement('li');
+      li.textContent = entry;
+      li.style.cssText = 'padding:6px 12px; cursor:pointer; font-size:14px; color:#333; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+      li.addEventListener('mouseenter', function () { this.style.background = '#f0f4f8'; });
+      li.addEventListener('mouseleave', function () { this.style.background = ''; });
+      li.addEventListener('click', function () {
+        document.getElementById('hostname').value = entry;
+        list.style.display = 'none';
+      });
+      list.appendChild(li);
+    });
+    // Show/hide the ▼ button based on whether there's history
+    var btn = document.getElementById('hostname-history-btn');
+    if (btn) btn.style.display = hist.length ? '' : 'none';
+  }
+
+  // Toggle dropdown on button click
+  var histBtn = document.getElementById('hostname-history-btn');
+  var histList = document.getElementById('hostname-history-list');
+  if (histBtn && histList) {
+    histBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      histList.style.display = histList.style.display === 'block' ? 'none' : 'block';
+    });
+    // Close dropdown when clicking outside
+    document.addEventListener('click', function () {
+      histList.style.display = 'none';
+    });
+  }
+
+  load_connection_history();
+
+  // === Username History ===
+  function save_username_history(username) {
+    var key = 'webssh_username_history';
+    var hist = JSON.parse(window.localStorage.getItem(key) || '[]');
+    hist = hist.filter(function (e) { return e !== username; });
+    hist.unshift(username);
+    hist = hist.slice(0, 10);
+    window.localStorage.setItem(key, JSON.stringify(hist));
+    load_username_history();
+  }
+
+  function load_username_history() {
+    var key = 'webssh_username_history';
+    var hist = JSON.parse(window.localStorage.getItem(key) || '[]');
+    var list = document.getElementById('username-history-list');
+    if (!list) return;
+    list.innerHTML = '';
+    hist.forEach(function (entry) {
+      var li = document.createElement('li');
+      li.textContent = entry;
+      li.style.cssText = 'padding:6px 12px; cursor:pointer; font-size:14px; color:#333; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+      li.addEventListener('mouseenter', function () { this.style.background = '#f0f4f8'; });
+      li.addEventListener('mouseleave', function () { this.style.background = ''; });
+      li.addEventListener('click', function () {
+        document.getElementById('username').value = entry;
+        list.style.display = 'none';
+      });
+      list.appendChild(li);
+    });
+    var btn = document.getElementById('username-history-btn');
+    if (btn) btn.style.display = hist.length ? '' : 'none';
+  }
+
+  var uHistBtn = document.getElementById('username-history-btn');
+  var uHistList = document.getElementById('username-history-list');
+  if (uHistBtn && uHistList) {
+    uHistBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      uHistList.style.display = uHistList.style.display === 'block' ? 'none' : 'block';
+    });
+    document.addEventListener('click', function () {
+      uHistList.style.display = 'none';
+    });
+  }
+
+  load_username_history();
+
+  // tmux checkbox: load saved preference
+  var tmuxEl = document.getElementById('use_tmux');
+  if (tmuxEl) {
+    tmuxEl.checked = window.localStorage.getItem('use_tmux') === '1';
+    tmuxEl.addEventListener('change', function () {
+      window.localStorage.setItem('use_tmux', this.checked ? '1' : '0');
+    });
+  }
 
   if (document.fonts) {
     document.fonts.ready.then(

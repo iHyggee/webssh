@@ -1,14 +1,19 @@
+import base64
+import hashlib
 import io
 import json
 import logging
+import os
 import socket
 import struct
+import time
 import traceback
 import weakref
 import paramiko
 import tornado.web
 
 from concurrent.futures import ThreadPoolExecutor
+from tornado.web import StaticFileHandler
 from tornado.ioloop import IOLoop
 from tornado.options import options
 from tornado.process import cpu_count
@@ -35,9 +40,193 @@ DEFAULT_PORT = 22
 swallow_http_errors = True
 redirecting = None
 
+# --- Cookie-based Auth ---
+_auth_credentials = None
+_auth_file_mtime = 0
+COOKIE_NAME = 'webssh_user'
+LOGIN_URL = '/login'
+COOKIE_VERSION = os.environ.get('COOKIE_VERSION', '1')
+
+
+def safe_next_url(next_url):
+    """Only allow relative paths — block open redirect to external sites."""
+    if not next_url:
+        return '/'
+    if next_url.startswith('/') and not next_url.startswith('//'):
+        return next_url
+    return '/'
+
+
+def valid_cookie_user(cookie_value):
+    """Check cookie value is 'username:version' and version matches."""
+    if not cookie_value:
+        return None
+    val = cookie_value.decode('utf-8') if isinstance(cookie_value, bytes) else cookie_value
+    if ':' in val:
+        username, version = val.rsplit(':', 1)
+        if version == COOKIE_VERSION:
+            return username
+        return None
+    # Legacy cookie without version: only accepted when version is default '1'
+    if COOKIE_VERSION == '1':
+        return val
+    return None
+
+
+# --- Rate Limiter ---
+_failed_attempts = {}
+MAX_FAILURES = 5
+FAIL_WINDOW = 60
+BAN_DURATION = 300
+
 
 class InvalidValueError(Exception):
     pass
+
+def load_auth_credentials(authfile):
+    """Load credentials from authfile and environment variables."""
+    global _auth_credentials, _auth_file_mtime
+    creds = {}
+    if authfile and os.path.isfile(authfile):
+        mtime = os.path.getmtime(authfile)
+        if _auth_credentials is not None and mtime == _auth_file_mtime:
+            return _auth_credentials
+        with open(authfile) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split(':', 2)
+                if len(parts) == 2:
+                    user, pwd = parts
+                    creds[user] = ('plain', pwd)
+                elif len(parts) == 3 and parts[1] == 'sha256':
+                    user, _, h = parts
+                    creds[user] = ('sha256', h)
+        _auth_file_mtime = mtime
+    env_user = os.environ.get('WEBSSH_USER', '').strip()
+    env_pass = os.environ.get('WEBSSH_PASSWORD', '').strip()
+    if env_user and env_pass:
+        creds[env_user] = ('plain', env_pass)
+    _auth_credentials = creds
+    return creds
+
+
+def verify_credentials(creds, header_value):
+    if not creds:
+        return True
+    if not header_value or not header_value.startswith('Basic '):
+        return False
+    try:
+        decoded = base64.b64decode(header_value[6:]).decode('utf-8')
+        user, _, password = decoded.partition(':')
+        entry = creds.get(user)
+        if not entry:
+            return False
+        mode, stored = entry
+        if mode == 'plain':
+            return password == stored
+        elif mode == 'sha256':
+            return hashlib.sha256(password.encode()).hexdigest() == stored
+    except Exception:
+        return False
+    return False
+
+
+def check_password(creds, username, password):
+    if not creds:
+        return True
+    entry = creds.get(username)
+    if not entry:
+        return False
+    mode, stored = entry
+    if mode == 'plain':
+        return password == stored
+    elif mode == 'sha256':
+        return hashlib.sha256(password.encode()).hexdigest() == stored
+    return False
+
+
+def get_client_ip(request):
+    """Return real client IP. When behind a trusted proxy, use X-Forwarded-For.
+    
+    Set BEHIND_PROXY=true and TRUSTED_PROXY=nginx_ip to enable.
+    Without TRUSTED_PROXY, X-Forwarded-For is NOT trusted (prevents spoofing).
+    """
+    behind = os.environ.get('BEHIND_PROXY', '').lower() in ('1', 'true', 'yes')
+    if behind:
+        trusted = os.environ.get('TRUSTED_PROXY', '')
+        if trusted:
+            trusted_ips = set(ip.strip() for ip in trusted.split(',') if ip.strip())
+            if request.remote_ip in trusted_ips:
+                forwarded = request.headers.get('X-Forwarded-For', '')
+                if forwarded:
+                    return forwarded.split(',')[0].strip()
+        else:
+            logging.warning(
+                'BEHIND_PROXY=true but TRUSTED_PROXY not set. '
+                'X-Forwarded-For header is NOT trusted to prevent IP spoofing. '
+                'Set TRUSTED_PROXY=your_nginx_ip.'
+            )
+    return request.remote_ip
+
+
+def check_rate_limit(client_ip):
+    now = time.time()
+    entry = _failed_attempts.get(client_ip)
+    if entry:
+        count, first, banned_until = entry
+        if banned_until and now >= banned_until:
+            del _failed_attempts[client_ip]
+            entry = None
+        elif banned_until and now < banned_until:
+            remaining = int(banned_until - now)
+            return True, 'Too many failed attempts. Try again in {} seconds.'.format(remaining)
+        if entry and now - first > FAIL_WINDOW:
+            del _failed_attempts[client_ip]
+            entry = None
+    expired = [ip for ip, e in _failed_attempts.items() if e[2] and now >= e[2]]
+    for ip in expired:
+        del _failed_attempts[ip]
+    return False, ''
+
+
+def record_failed_attempt(client_ip):
+    now = time.time()
+    entry = _failed_attempts.get(client_ip)
+    if entry:
+        count, first, banned_until = entry
+        if now - first <= FAIL_WINDOW:
+            count += 1
+        else:
+            count = 1
+            first = now
+        if count >= MAX_FAILURES:
+            banned_until = now + BAN_DURATION
+        _failed_attempts[client_ip] = (count, first, banned_until)
+    else:
+        _failed_attempts[client_ip] = (1, now, 0)
+
+
+def reset_rate_limit(client_ip):
+    _failed_attempts.pop(client_ip, None)
+
+
+def get_ban_seconds(client_ip):
+    entry = _failed_attempts.get(client_ip)
+    if entry and entry[2]:
+        return max(0, int(entry[2] - time.time()))
+    return 0
+
+
+def get_fail_count(client_ip):
+    entry = _failed_attempts.get(client_ip)
+    if entry:
+        count, first, _ = entry
+        if time.time() - first <= FAIL_WINDOW:
+            return count
+    return 0
+
 
 
 class SSHClient(paramiko.SSHClient):
@@ -178,9 +367,15 @@ class PrivateKey(object):
         logging.error(str(self.last_exception))
         msg = 'Invalid key'
         if self.password:
-            msg += ' or wrong passphrase "{}" for decrypting it.'.format(
-                    self.password)
+            msg += ' or wrong passphrase for decrypting it.'
         raise InvalidValueError(msg)
+
+
+class NoCacheStaticFileHandler(StaticFileHandler):
+    """静态文件处理器：禁止浏览器长期缓存，每次请求走 304 校验"""
+
+    def set_extra_headers(self, path):
+        self.set_header('Cache-Control', 'no-cache')
 
 
 class MixinHandler(object):
@@ -196,6 +391,26 @@ class MixinHandler(object):
         self.check_request()
         self.loop = loop
         self.origin_policy = self.settings.get('origin_policy')
+
+    def prepare(self):
+        authfile = self.settings.get('authfile', '')
+        creds = load_auth_credentials(authfile)
+        if not creds:
+            return
+        client_ip = get_client_ip(self.request)
+        blocked, reason = check_rate_limit(client_ip)
+        if blocked:
+            ban_seconds = get_ban_seconds(client_ip)
+            self.render('blocked.html', ban_seconds=ban_seconds)
+            return
+        current_user = self.get_secure_cookie(COOKIE_NAME)
+        if current_user:
+            username = valid_cookie_user(current_user)
+            if username and username in creds:
+                return
+        login_url = LOGIN_URL + '?next=' + self.request.uri
+        self.redirect(login_url)
+        return
 
     def check_request(self):
         context = self.request.connection.context
@@ -285,7 +500,7 @@ class MixinHandler(object):
             return self.get_context_addr()
 
     def get_real_client_addr(self):
-        ip = self.request.remote_ip
+        ip = get_client_ip(self.request)
 
         if ip == self.request.headers.get('X-Real-Ip'):
             port = self.request.headers.get('X-Real-Port')
@@ -312,6 +527,60 @@ class NotFoundHandler(MixinHandler, tornado.web.ErrorHandler):
         raise tornado.web.HTTPError(404)
 
 
+class LoginHandler(tornado.web.RequestHandler):
+
+    def initialize(self, loop=None):
+        self.loop = loop
+
+    def get(self):
+        authfile = self.settings.get('authfile', '')
+        creds = load_auth_credentials(authfile)
+        if not creds:
+            self.redirect('/')
+            return
+        current_user = self.get_secure_cookie(COOKIE_NAME)
+        if current_user:
+            username = valid_cookie_user(current_user)
+            if username and username in creds:
+                next_url = safe_next_url(self.get_argument('next', '/'))
+                self.redirect(next_url)
+                return
+        error = self.get_argument('error', '')
+        next_url = safe_next_url(self.get_argument('next', '/'))
+        self.render('login.html', error=error, next_url=next_url,
+                    remaining=None, username=None)
+
+    def post(self):
+        authfile = self.settings.get('authfile', '')
+        creds = load_auth_credentials(authfile)
+        if not creds:
+            self.redirect('/')
+            return
+        client_ip = get_client_ip(self.request)
+        blocked, reason = check_rate_limit(client_ip)
+        if blocked:
+            ban_seconds = get_ban_seconds(client_ip)
+            self.render('blocked.html', ban_seconds=ban_seconds)
+            return
+        username = self.get_argument('username', '').strip()
+        password = self.get_argument('password', '')
+        next_url = safe_next_url(self.get_argument('next', '/'))
+        if check_password(creds, username, password):
+            reset_rate_limit(client_ip)
+            self.set_secure_cookie(COOKIE_NAME,
+                                    username + ':' + COOKIE_VERSION,
+                                    expires_days=7)
+            self.redirect(next_url)
+        else:
+            record_failed_attempt(client_ip)
+            fail_count = get_fail_count(client_ip)
+            remaining = max(0, MAX_FAILURES - fail_count)
+            error = '用户名或密码错误'
+            self.render('login.html', error=error, next_url=next_url,
+                        remaining=remaining, username=username)
+
+
+
 class IndexHandler(MixinHandler, tornado.web.RequestHandler):
 
     executor = ThreadPoolExecutor(max_workers=cpu_count()*5)
@@ -323,6 +592,7 @@ class IndexHandler(MixinHandler, tornado.web.RequestHandler):
         self.ssh_client = self.get_ssh_client()
         self.debug = self.settings.get('debug', False)
         self.font = self.settings.get('font', '')
+        self.allow_url_command = self.settings.get('allow_url_command', False)
         self.result = dict(id=None, status=None, encoding=None)
 
     def write_error(self, status_code, **kwargs):
@@ -394,7 +664,6 @@ class IndexHandler(MixinHandler, tornado.web.RequestHandler):
         password = self.get_argument('password', u'')
         privatekey, filename = self.get_privatekey()
         passphrase = self.get_argument('passphrase', u'')
-        totp = self.get_argument('totp', u'')
 
         if isinstance(self.policy, paramiko.RejectPolicy):
             self.lookup_hostname(hostname, port)
@@ -404,9 +673,9 @@ class IndexHandler(MixinHandler, tornado.web.RequestHandler):
         else:
             pkey = None
 
-        self.ssh_client.totp = totp
+        self.ssh_client.totp = u''
         args = (hostname, port, username, password, pkey)
-        logging.debug(args)
+        logging.debug('Connecting to %s:%s as %s', args[0], args[1], args[2])
 
         return args
 
@@ -420,9 +689,10 @@ class IndexHandler(MixinHandler, tornado.web.RequestHandler):
             return encoding
 
     def get_default_encoding(self, ssh):
+        shell = os.environ.get('SHELL', '/bin/sh')
         commands = [
-            '$SHELL -ilc "locale charmap"',
-            '$SHELL -ic "locale charmap"'
+            shell + ' -ilc "locale charmap"',
+            shell + ' -ic "locale charmap"'
         ]
 
         for command in commands:
@@ -471,9 +741,8 @@ class IndexHandler(MixinHandler, tornado.web.RequestHandler):
         return worker
 
     def check_origin(self):
-        event_origin = self.get_argument('_origin', u'')
         header_origin = self.request.headers.get('Origin')
-        origin = event_origin or header_origin
+        origin = header_origin
 
         if origin:
             if not super(IndexHandler, self).check_origin(origin):
@@ -481,14 +750,16 @@ class IndexHandler(MixinHandler, tornado.web.RequestHandler):
                     403, 'Cross origin operation is not allowed.'
                 )
 
-            if not event_origin and self.origin_policy != 'same':
+            if self.origin_policy != 'same':
                 self.set_header('Access-Control-Allow-Origin', origin)
 
     def head(self):
         pass
 
     def get(self):
-        self.render('index.html', debug=self.debug, font=self.font)
+        self.render('index.html', debug=self.debug, font=self.font,
+                    allow_url_command=self.allow_url_command,
+                    client_ip=get_client_ip(self.request))
 
     @tornado.gen.coroutine
     def post(self):
@@ -516,12 +787,19 @@ class IndexHandler(MixinHandler, tornado.web.RequestHandler):
             logging.error(traceback.format_exc())
             self.result.update(status=str(exc))
         else:
-            if not workers:
-                clients[ip] = workers
-            worker.src_addr = (ip, port)
-            workers[worker.id] = worker
-            self.loop.call_later(options.delay, recycle_worker, worker)
-            self.result.update(id=worker.id, encoding=worker.encoding)
+            # Re-check after SSHyield to prevent TOCTOU race:
+            # another request may have added workers while we waited
+            workers_now = clients.get(ip, {})
+            if len(workers_now) >= options.maxconn:
+                worker.close(reason='Too many live connections')
+                self.result.update(status='Too many live connections.')
+            else:
+                if not workers_now:
+                    clients[ip] = workers_now
+                worker.src_addr = (ip, port)
+                workers_now[worker.id] = worker
+                self.loop.call_later(options.delay, recycle_worker, worker)
+                self.result.update(id=worker.id, encoding=worker.encoding)
 
         self.write(self.result)
 
@@ -557,7 +835,7 @@ class WsockHandler(MixinHandler, tornado.websocket.WebSocketHandler):
                 self.close(reason='Websocket authentication failed.')
 
     def on_message(self, message):
-        logging.debug('{!r} from {}:{}'.format(message, *self.src_addr))
+        logging.debug('message (%d bytes) from %s:%s', len(message), *self.src_addr)
         worker = self.worker_ref()
         if not worker:
             # The worker has likely been closed. Do not process.

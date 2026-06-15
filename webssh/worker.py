@@ -1,4 +1,5 @@
 import logging
+import re
 try:
     import secrets
 except ImportError:
@@ -8,6 +9,10 @@ import tornado.websocket
 from uuid import uuid4
 from tornado.ioloop import IOLoop
 from tornado.iostream import _ERRNO_CONNRESET
+
+# Strip unsupported OSC sequences: 10=fg 11=bg 12=cursor color
+# xterm.js doesn't handle these, they appear as garbage text
+_osc_re = re.compile(b'\\x1b](?:10|11|12);[^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)')
 from tornado.util import errno_from_exception
 
 
@@ -79,13 +84,15 @@ class Worker(object):
             if self.chan.closed or errno_from_exception(e) in _ERRNO_CONNRESET:
                 self.close(reason='chan error on reading')
         else:
-            logging.debug('{!r} from {}:{}'.format(data, *self.dst_addr))
+            logging.debug('%d bytes from %s:%s', len(data), *self.dst_addr)
             if not data:
                 self.close(reason='chan closed')
                 return
 
-            logging.debug('{!r} to {}:{}'.format(data, *self.handler.src_addr))
+            logging.debug('%d bytes to client %s:%s', len(data), *self.handler.src_addr)
             try:
+                # Filter unsupported OSC sequences before sending
+                data = _osc_re.sub(b'', data)
                 self.handler.write_message(data, binary=True)
             except tornado.websocket.WebSocketClosedError:
                 self.close(reason='websocket closed')
@@ -96,7 +103,7 @@ class Worker(object):
             return
 
         data = ''.join(self.data_to_dst)
-        logging.debug('{!r} to {}:{}'.format(data, *self.dst_addr))
+        logging.debug('%d bytes to %s:%s', len(data), *self.dst_addr)
 
         try:
             sent = self.chan.send(data)
